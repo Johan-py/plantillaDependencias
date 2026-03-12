@@ -290,14 +290,23 @@ def configure_git_hooks(log=None):
     pre_commit = os.path.join(hooks_dir, "pre-commit")
 
     script = """#!/bin/sh
+
 echo "Running global checks..."
 
-if command -v eslint >/dev/null 2>&1; then
-  eslint .
-fi
+FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
-if command -v prettier >/dev/null 2>&1; then
-  prettier --check .
+JS_FILES=$(echo "$FILES" | grep -E '\\.(js|ts)$')
+
+if [ ! -z "$JS_FILES" ]; then
+
+  if command -v eslint >/dev/null 2>&1; then
+    eslint $JS_FILES
+  fi
+
+  if command -v prettier >/dev/null 2>&1; then
+    prettier --check $JS_FILES
+  fi
+
 fi
 """
 
@@ -307,8 +316,6 @@ fi
     os.chmod(pre_commit, 0o755)
 
     log_msg(log, "Hooks globales configurados")
-
-
 # -------------------------------------------------
 # PRETTIER CONFIG
 # -------------------------------------------------
@@ -352,13 +359,11 @@ def configure_eslint(log=None):
     content = """
 {
   "env": {
-    "browser": true,
-    "node": true,
-    "es2021": true
+    "node": true
   },
   "extends": ["eslint:recommended"],
   "parserOptions": {
-    "ecmaVersion": "latest"
+    "ecmaVersion": 2020
   },
   "rules": {}
 }
@@ -368,8 +373,6 @@ def configure_eslint(log=None):
         f.write(content)
 
     log_msg(log, "ESLint configurado")
-
-
 # -------------------------------------------------
 # FINAL
 # -------------------------------------------------
