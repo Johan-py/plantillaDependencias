@@ -3,7 +3,8 @@ import shutil
 import platform
 import os
 from pathlib import Path
-
+import time
+time.sleep(2)
 OS = platform.system()
 
 
@@ -31,17 +32,39 @@ def run(cmd, log=None):
     log_msg(log, f"$ {cmd}")
 
     try:
-        subprocess.run(cmd, shell=True, check=True)
+
+        process = subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+
+        if process.stdout:
+            log_msg(log, process.stdout.strip())
+
+        if process.stderr:
+            log_msg(log, process.stderr.strip())
 
     except subprocess.CalledProcessError as e:
 
         log_msg(log, f"ERROR ejecutando: {cmd}")
-        raise e
 
+        if e.stdout:
+            log_msg(log, e.stdout.strip())
+
+        if e.stderr:
+            log_msg(log, e.stderr.strip())
 
 def exists(cmd):
-    return shutil.which(cmd) is not None
+    return shutil.which(cmd) is not None or shutil.which(cmd + ".cmd") is not None
+def scoop_path():
+    return Path.home() / "scoop" / "shims" / "scoop.cmd"
 
+
+def scoop_exists():
+    return scoop_path().exists()
 
 # -------------------------------------------------
 # GIT
@@ -67,6 +90,17 @@ def configure_git(name, email, log=None):
 
     step("Configuring Git", log)
 
+    lock = Path.home() / ".gitconfig.lock"
+
+    # eliminar lock viejo
+    if lock.exists():
+        try:
+            lock.unlink()
+            log_msg(log, "Removed stale gitconfig lock")
+        except Exception as e:
+            log_msg(log, f"Could not remove gitconfig lock: {e}")
+
+    # configurar usuario
     run(f'git config --global user.name "{name}"', log)
     run(f'git config --global user.email "{email}"', log)
 
@@ -78,7 +112,17 @@ def configure_git(name, email, log=None):
     else:
         run("git config --global core.autocrlf input", log)
 
-    log_msg(log, "Git configurado")
+    # verificar resultado
+    user = subprocess.check_output(
+        "git config --global user.name", shell=True, text=True
+    ).strip()
+
+    mail = subprocess.check_output(
+        "git config --global user.email", shell=True, text=True
+    ).strip()
+
+    log_msg(log, f"Git user configurado: {user}")
+    log_msg(log, f"Git email configurado: {mail}")
 
 
 # -------------------------------------------------
@@ -155,10 +199,9 @@ def install_node(log=None):
 
     step("Checking Node", log)
 
-    if exists("node"):
+    if exists("node") and exists("npm"):
         log_msg(log, "Node OK")
         return
-
     if OS == "Linux":
 
         run("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -", log)
@@ -186,11 +229,20 @@ def install_bun(log=None):
     elif OS == "Windows":
         run('powershell -c "irm https://bun.sh/install.ps1 | iex"', log)
 
+def ensure_bun_path(log=None):
+
+    bun_bin = Path.home() / ".bun" / "bin"
+
+    if OS == "Windows":
+
+        run(f'setx PATH "%PATH%;{bun_bin}"', log)
+
+    log_msg(log, "Bun bin agregado al PATH")
+
 
 # -------------------------------------------------
 # SUPABASE CLI
 # -------------------------------------------------
-
 def install_supabase(log=None):
 
     step("Installing Supabase CLI", log)
@@ -199,12 +251,39 @@ def install_supabase(log=None):
         log_msg(log, "Supabase CLI OK")
         return
 
+    # Prefer Bun
     if exists("bun"):
         run("bun add -g supabase", log)
-    else:
-        run("npm install -g supabase", log)
+        return
 
+    # Windows -> Scoop
+    if OS == "Windows":
 
+        log_msg(log, "Installing Supabase via Scoop")
+
+        if not scoop_exists():
+
+            run(
+                'powershell -Command "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"',
+                log
+            )
+
+            run(
+                'powershell -Command "iwr -useb get.scoop.sh | iex"',
+                log
+            )
+
+        scoop = scoop_path()
+
+        if scoop.exists():
+            run(f'"{scoop}" install supabase', log)
+        else:
+            log_msg(log, "Scoop installation failed")
+
+        return
+
+    # Linux fallback
+    run("curl -fsSL https://supabase.com/install | sh", log)
 # -------------------------------------------------
 # PRISMA CLI
 # -------------------------------------------------
@@ -219,14 +298,15 @@ def install_prisma(log=None):
 
     if exists("bun"):
         run("bun add -g prisma", log)
-    else:
+
+    elif exists("npm"):
         run("npm install -g prisma", log)
 
-
+    else:
+        log_msg(log, "No JS runtime found (bun/npm)")
 # -------------------------------------------------
 # ESLINT
 # -------------------------------------------------
-
 def install_eslint(log=None):
 
     step("Installing ESLint", log)
@@ -237,10 +317,12 @@ def install_eslint(log=None):
 
     if exists("bun"):
         run("bun add -g eslint", log)
-    else:
+
+    elif exists("npm"):
         run("npm install -g eslint", log)
 
-
+    else:
+        log_msg(log, "No JS runtime found")
 # -------------------------------------------------
 # PRETTIER
 # -------------------------------------------------

@@ -4,9 +4,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QLabel,
-    QLineEdit
+    QLineEdit,
+    QDialog,
+    QApplication,
+    QMessageBox
 )
-from PySide6.QtWidgets import QMessageBox
+
 from PySide6.QtCore import Signal, QObject
 import threading
 
@@ -17,12 +20,17 @@ class Logger(QObject):
 
     log_signal = Signal(str)
     ssh_signal = Signal(str)
+    finished_signal = Signal()
 
     def log(self, msg):
         self.log_signal.emit(msg)
 
     def show_ssh(self, key):
         self.ssh_signal.emit(key)
+
+    def finished(self):
+        self.finished_signal.emit()
+
 
 class VentanaPrincipal(QWidget):
 
@@ -31,6 +39,8 @@ class VentanaPrincipal(QWidget):
 
         self.setWindowTitle("Plantilla instaladora V1.0")
         self.resize(600, 600)
+
+        self.installing = False
 
         layout = QVBoxLayout()
 
@@ -51,10 +61,10 @@ class VentanaPrincipal(QWidget):
 
         layout.addWidget(self.log_box)
 
-        btn_install = QPushButton("correr Instalador :)")
-        btn_install.clicked.connect(self.run_installer)
+        self.btn_install = QPushButton("Correr instalador")
+        self.btn_install.clicked.connect(self.run_installer)
 
-        layout.addWidget(btn_install)
+        layout.addWidget(self.btn_install)
 
         self.setLayout(layout)
 
@@ -62,38 +72,61 @@ class VentanaPrincipal(QWidget):
         self.logger = Logger()
         self.logger.log_signal.connect(self.log_box.append)
         self.logger.ssh_signal.connect(self.show_ssh_popup)
+        self.logger.finished_signal.connect(self.install_finished)
 
     # ----------------------
 
-    def run_thread(self, func):
-        thread = threading.Thread(target=func)
+    def run_thread(self, func, *args):
+        thread = threading.Thread(target=func, args=args, daemon=True)
         thread.start()
 
     # ----------------------
+
     def show_ssh_popup(self, key):
 
-        msg = QMessageBox(self)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("GitHub SSH Setup")
+        dialog.resize(500, 300)
 
-        msg.setWindowTitle("GitHub SSH Setup")
+        layout = QVBoxLayout()
 
-        msg.setText(
-            "Agrega la clave SSH a GitHub siguiendo el enlace y dando a 'add new ssh key', copiando y pegando el contenido de abajo:\n\n"
+        label = QLabel(
+            "Agrega esta clave SSH a GitHub:\n\n"
             "https://github.com/settings/keys\n\n"
-            + key
+            "Copia la clave de abajo:"
         )
 
-        msg.exec()
+        layout.addWidget(label)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setText(key)
+        text.selectAll()
+
+        layout.addWidget(text)
+
+        btn_copy = QPushButton("Copiar clave")
+
+        def copy_key():
+            QApplication.clipboard().setText(key)
+
+        btn_copy.clicked.connect(copy_key)
+
+        layout.addWidget(btn_copy)
+
+        dialog.setLayout(layout)
+
+        dialog.exec()
+
     # -----------------------
-    def run_installer(self):
 
-        name = self.git_name.text()
-        email = self.git_email.text()
+    def task_installer(self, name, email):
 
-        def task():
+        log = self.logger.log
 
-            log = self.logger.log
+        try:
 
-            log("Iniciando intalacion...")
+            log("Iniciando instalación...")
 
             core.install_git(log)
             core.configure_git(name, email, log)
@@ -101,8 +134,11 @@ class VentanaPrincipal(QWidget):
             core.install_git_credentials(log)
 
             core.setup_github_ssh(email, log, self.logger.show_ssh)
+
             core.install_node(log)
+
             core.install_bun(log)
+            core.ensure_bun_path(log)
 
             core.install_supabase(log)
             core.install_prisma(log)
@@ -117,6 +153,40 @@ class VentanaPrincipal(QWidget):
             core.configure_prettier(log)
             core.configure_eslint(log)
 
-            log("Entorno Listo")
+            log("Entorno listo")
 
-        self.run_thread(task)
+        except Exception as e:
+
+            log(f"ERROR: {e}")
+
+        finally:
+
+            self.logger.finished()
+
+    # -----------------------
+
+    def install_finished(self):
+
+        self.installing = False
+        self.btn_install.setEnabled(True)
+
+        self.logger.log("Instalación finalizada")
+
+    # -----------------------
+
+    def run_installer(self):
+
+        if self.installing:
+            return
+
+        name = self.git_name.text().strip()
+        email = self.git_email.text().strip()
+
+        if not name or not email:
+            QMessageBox.warning(self, "Error", "Debes ingresar Git username y email")
+            return
+
+        self.installing = True
+        self.btn_install.setEnabled(False)
+
+        self.run_thread(self.task_installer, name, email)
