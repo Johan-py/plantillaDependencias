@@ -57,14 +57,18 @@ def run(cmd, log=None):
         if e.stderr:
             log_msg(log, e.stderr.strip())
 
+
 def exists(cmd):
     return shutil.which(cmd) is not None or shutil.which(cmd + ".cmd") is not None
+
+
 def scoop_path():
     return Path.home() / "scoop" / "shims" / "scoop.cmd"
 
 
 def scoop_exists():
     return scoop_path().exists()
+
 
 # -------------------------------------------------
 # GIT
@@ -229,6 +233,7 @@ def install_bun(log=None):
     elif OS == "Windows":
         run('powershell -c "irm https://bun.sh/install.ps1 | iex"', log)
 
+
 def ensure_bun_path(log=None):
 
     bun_bin = Path.home() / ".bun" / "bin"
@@ -284,6 +289,8 @@ def install_supabase(log=None):
 
     # Linux fallback
     run("curl -fsSL https://supabase.com/install | sh", log)
+
+
 # -------------------------------------------------
 # PRISMA CLI
 # -------------------------------------------------
@@ -304,6 +311,8 @@ def install_prisma(log=None):
 
     else:
         log_msg(log, "No JS runtime found (bun/npm)")
+
+
 # -------------------------------------------------
 # ESLINT
 # -------------------------------------------------
@@ -323,6 +332,8 @@ def install_eslint(log=None):
 
     else:
         log_msg(log, "No JS runtime found")
+
+
 # -------------------------------------------------
 # PRETTIER
 # -------------------------------------------------
@@ -356,12 +367,12 @@ def install_husky(log=None):
 
 
 # -------------------------------------------------
-# GLOBAL GIT HOOKS
+# GLOBAL GIT HOOKS - VERSIÓN MEJORADA
 # -------------------------------------------------
 
 def configure_git_hooks(log=None):
 
-    step("Configuring global Git hooks", log)
+    step("Configuring global Git hooks (mejorado)", log)
 
     hooks_dir = os.path.expanduser("~/.githooks")
 
@@ -371,25 +382,94 @@ def configure_git_hooks(log=None):
 
     pre_commit = os.path.join(hooks_dir, "pre-commit")
 
+    # Script mejorado que:
+    # 1. Usa ESLint/Prettier del proyecto cuando están disponibles
+    # 2. Respeta archivos de configuración del proyecto
+    # 3. Soporta TypeScript correctamente
+    # 4. Permite saltar hooks con un archivo .skip-global-hooks
     script = """#!/bin/sh
 
 echo "Running global checks..."
 
+# Permitir saltar hooks globales para proyectos específicos
+if [ -f ".skip-global-hooks" ]; then
+  echo "  → Skipping global hooks (found .skip-global-hooks)"
+  exit 0
+fi
+
+# Verificar si estamos en un proyecto con package.json
+if [ ! -f "package.json" ]; then
+  exit 0
+fi
+
+# Función para usar ESLint del proyecto
+run_eslint() {
+  if [ -f "node_modules/.bin/eslint" ]; then
+    ./node_modules/.bin/eslint "$@"
+    return $?
+  elif command -v eslint >/dev/null 2>&1; then
+    eslint "$@"
+    return $?
+  fi
+  return 0
+}
+
+# Función para usar Prettier del proyecto
+run_prettier() {
+  if [ -f "node_modules/.bin/prettier" ]; then
+    ./node_modules/.bin/prettier "$@"
+    return $?
+  elif command -v prettier >/dev/null 2>&1; then
+    prettier "$@"
+    return $?
+  fi
+  return 0
+}
+
+# Obtener archivos staged
 FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
-JS_FILES=$(echo "$FILES" | grep -E '\\.(js|ts)$')
+# Verificar archivos JS/TS/JSX/TSX
+JS_FILES=$(echo "$FILES" | grep -E '\\.(js|jsx|ts|tsx)$' | grep -v "node_modules" || true)
 
 if [ ! -z "$JS_FILES" ]; then
-
-  if command -v eslint >/dev/null 2>&1; then
-    eslint $JS_FILES
+  echo "  → Checking staged files:"
+  echo "$JS_FILES" | sed 's/^/      /'
+  
+  # Ejecutar ESLint
+  echo "  → Running ESLint..."
+  run_eslint $JS_FILES --max-warnings=0
+  ESLINT_EXIT=$?
+  
+  if [ $ESLINT_EXIT -ne 0 ]; then
+    echo ""
+    echo "❌ ESLint errors found. Fix them with:"
+    echo "   bun run lint:fix"
+    echo ""
+    echo "Or skip hooks with: touch .skip-global-hooks"
+    exit 1
   fi
-
-  if command -v prettier >/dev/null 2>&1; then
-    prettier --check $JS_FILES
+  
+  # Verificar formato con Prettier
+  echo "  → Checking formatting..."
+  run_prettier --check $JS_FILES
+  PRETTIER_EXIT=$?
+  
+  if [ $PRETTIER_EXIT -ne 0 ]; then
+    echo ""
+    echo "❌ Prettier formatting issues found. Fix them with:"
+    echo "   bun run lint:fix"
+    echo "   or"
+    echo "   npx prettier --write $JS_FILES"
+    echo ""
+    echo "Or skip hooks with: touch .skip-global-hooks"
+    exit 1
   fi
-
+  
+  echo "  ✅ All checks passed!"
 fi
+
+exit 0
 """
 
     with open(pre_commit, "w") as f:
@@ -397,21 +477,25 @@ fi
 
     os.chmod(pre_commit, 0o755)
 
-    log_msg(log, "Hooks globales configurados")
+    log_msg(log, "✓ Hooks globales configurados (versión mejorada)")
+    log_msg(log, "  → Usa ESLint/Prettier del proyecto cuando están disponibles")
+    log_msg(log, "  → Soporta TypeScript correctamente")
+    log_msg(log, "  → Para saltar hooks: touch .skip-global-hooks")
+
+
 # -------------------------------------------------
-# PRETTIER CONFIG
+# PRETTIER CONFIG - VERSIÓN MEJORADA (OPCIONAL)
 # -------------------------------------------------
 
 def configure_prettier(log=None):
 
-    step("Configuring Prettier", log)
+    step("Configuring Prettier (opcional)", log)
 
     home = Path.home()
 
     config = home / ".prettierrc"
 
-    content = """
-{
+    content = """{
   "semi": false,
   "singleQuote": true,
   "tabWidth": 2,
@@ -420,41 +504,62 @@ def configure_prettier(log=None):
 }
 """
 
-    with open(config, "w") as f:
-        f.write(content)
-
-    log_msg(log, "Prettier configurado")
+    # Solo crear si no existe, para no sobrescribir config existente
+    if not config.exists():
+        with open(config, "w") as f:
+            f.write(content)
+        log_msg(log, "✓ Prettier global configurado")
+    else:
+        log_msg(log, "→ Prettier global config ya existe, no se modificó")
 
 
 # -------------------------------------------------
-# ESLINT CONFIG
+# ESLINT CONFIG - VERSIÓN MEJORADA (OPCIONAL)
 # -------------------------------------------------
 
 def configure_eslint(log=None):
 
-    step("Configuring ESLint", log)
+    step("Configuring ESLint (opcional)", log)
 
     home = Path.home()
 
     config = home / ".eslintrc.json"
 
-    content = """
-{
+    # Configuración mejorada que soporta TypeScript si está disponible
+    content = """{
   "env": {
-    "node": true
+    "node": true,
+    "es2022": true
   },
   "extends": ["eslint:recommended"],
   "parserOptions": {
-    "ecmaVersion": 2020
+    "ecmaVersion": 2022,
+    "sourceType": "module"
   },
-  "rules": {}
+  "rules": {
+    "no-console": "off",
+    "prefer-const": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["*.ts", "*.tsx"],
+      "parser": "@typescript-eslint/parser",
+      "plugins": ["@typescript-eslint"],
+      "extends": ["plugin:@typescript-eslint/recommended"]
+    }
+  ]
 }
 """
 
-    with open(config, "w") as f:
-        f.write(content)
+    # Solo crear si no existe, para no sobrescribir config existente
+    if not config.exists():
+        with open(config, "w") as f:
+            f.write(content)
+        log_msg(log, "✓ ESLint global configurado")
+    else:
+        log_msg(log, "→ ESLint global config ya existe, no se modificó")
 
-    log_msg(log, "ESLint configurado")
+
 # -------------------------------------------------
 # FINAL
 # -------------------------------------------------
@@ -468,16 +573,19 @@ def finish(log=None):
     log_msg(log, """
 Tools instaladas:
 
-git
-bun
-node (opcional)
+✓ git
+✓ bun
+✓ node (opcional)
+✓ supabase CLI
+✓ prisma CLI
+✓ eslint
+✓ prettier
+✓ husky
+✓ SSH GitHub
+✓ Git hooks globales (mejorados)
 
-supabase CLI
-prisma CLI
-eslint
-prettier
-husky
-
-SSH GitHub
-Git hooks globales
+NOTAS IMPORTANTES:
+• Los hooks globales usan ESLint/Prettier del proyecto cuando están disponibles
+• Para saltar hooks globales: touch .skip-global-hooks
+• Si usas TypeScript, asegúrate de tener @typescript-eslint/parser en el proyecto
 """)
